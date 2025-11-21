@@ -1,0 +1,7 @@
+{
+  "name": "Nexus AI",
+  "description": "A high-performance, aesthetic AI chat interface powered by Gemini 2.5 Flash for speed and efficiency. Features reasoning capabilities, web search grounding, and multimodal input.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
