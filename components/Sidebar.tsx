@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { MessageSquarePlus, PanelLeftClose } from 'lucide-react';
 import { ChatSession } from '../types';
@@ -23,10 +22,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onOpenSettings
 }) => {
-  // The width handling is done by the parent container in App.tsx for the transition.
-  // This component fills the available space.
   return (
-    <div className="h-full bg-surface flex flex-col border-r border-border min-w-[280px]">
+    <div className="w-[280px] h-full bg-surface flex flex-col">
       
       {/* Header */}
       <div className="p-4 flex items-center justify-between flex-shrink-0">

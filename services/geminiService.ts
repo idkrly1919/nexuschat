@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Content, Part, GenerateContentResponse } from "@google/genai";
 import { Message, Attachment, AppConfig, GroundingMetadata, Role } from "../types";
 import { getSystemInstruction, DEEP_RESEARCH_MODEL, IMAGE_GEN_MODEL, MAX_THINKING_BUDGET_FLASH } from "../constants";
@@ -64,6 +63,11 @@ const formatMessagesForGemini = (
 export const generateImage = async (prompt: string): Promise<{ base64: string, model: string, prompt: string }> => {
   try {
     // Use the simpler generateContent for nano models as per guidelines
+    // Added specific validation for the prompt to be non-empty
+    if (!prompt || !prompt.trim()) {
+        throw new Error("Image prompt cannot be empty.");
+    }
+
     const response = await ai.models.generateContent({
       model: IMAGE_GEN_MODEL,
       contents: {
@@ -73,13 +77,15 @@ export const generateImage = async (prompt: string): Promise<{ base64: string, m
 
     // Robust validation to prevent crashes
     if (!response || !response.candidates || response.candidates.length === 0) {
-        throw new Error("The model returned an empty response.");
+        throw new Error("The model returned an empty response (no candidates).");
     }
 
-    const parts = response.candidates[0].content?.parts;
-    if (!parts || parts.length === 0) {
-         throw new Error("The model returned no content parts.");
+    const content = response.candidates[0].content;
+    if (!content || !content.parts || content.parts.length === 0) {
+         throw new Error("The model returned a candidate but no content parts.");
     }
+
+    const parts = content.parts;
 
     // Iterate through all parts to find the image, as per guidelines
     for (const part of parts) {
@@ -94,15 +100,16 @@ export const generateImage = async (prompt: string): Promise<{ base64: string, m
     
     // If no image data found, check for text refusal
     const textPart = parts.find(p => p.text);
-    if (textPart) {
-        throw new Error(`Model refusal: ${textPart.text}`);
+    if (textPart && textPart.text) {
+        console.warn("Model Refusal/Text Only:", textPart.text);
+        throw new Error(`Model response was text-only: "${textPart.text.slice(0, 100)}..."`);
     }
 
-    throw new Error('No image data found in response.');
+    throw new Error('No valid image data found in the response.');
   } catch (error: any) {
     console.error("Error in generateImage:", error);
-    // Re-throw with clear message
-    throw new Error(error.message || "Image generation failed");
+    // Re-throw with clear message so App.tsx can display it
+    throw new Error(error.message || "Image generation failed due to an unknown error.");
   }
 };
 
@@ -144,9 +151,9 @@ export const streamChatResponse = async (
       contents,
       config: {
         systemInstruction: systemInstruction,
-        ...generationConfig
+        ...generationConfig,
+        tools: tools.length > 0 ? tools : undefined,
       },
-      tools: tools.length > 0 ? tools : undefined,
     });
 
     let fullText = "";

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { InputArea } from './components/InputArea';
@@ -74,7 +73,11 @@ const App: React.FC = () => {
   };
 
   const handleSendMessage = async (text: string, attachments: Attachment[], currentConfig: AppConfig) => {
-    if (!currentSessionId) {
+    if (isLoading) return;
+
+    let targetSessionId = currentSessionId;
+
+    if (!targetSessionId) {
       const newSession: ChatSession = {
         id: Date.now().toString(),
         title: text.slice(0, 30) || 'New Chat',
@@ -83,10 +86,13 @@ const App: React.FC = () => {
       };
       setSessions(prev => [newSession, ...prev]);
       setCurrentSessionId(newSession.id);
-      // Small delay to ensure state update before processing
-      setTimeout(() => processMessage(newSession.id, text, attachments, currentConfig), 0);
-    } else {
-      processMessage(currentSessionId, text, attachments, currentConfig);
+      targetSessionId = newSession.id;
+    }
+
+    // Use a microtask to ensure state is settled or just pass ID directly
+    // We pass targetSessionId directly to processMessage to avoid closure staleness
+    if (targetSessionId) {
+        processMessage(targetSessionId, text, attachments, currentConfig);
     }
   };
 
@@ -103,10 +109,17 @@ const App: React.FC = () => {
       timestamp: Date.now()
     };
 
-    updateSessionMessages(sessionId, (msgs) => [...msgs, userMsg]);
+    // Prevent duplicates
+    updateSessionMessages(sessionId, (msgs) => {
+        if (msgs.some(m => m.id === userMsgId)) return msgs;
+        return [...msgs, userMsg];
+    });
 
     // 2. Determine type (Image Gen vs Chat)
+    // Use a loose check for "generate" and "image" if the constants are too strict, 
+    // but relying on constants is safer.
     const isImageGen = IMAGE_GEN_KEYWORDS.some(k => text.toLowerCase().includes(k));
+    
     const modelMsgId = (Date.now() + 1).toString();
 
     // 3. Add Model Placeholder
@@ -119,29 +132,47 @@ const App: React.FC = () => {
       isStreaming: !isImageGen // Only stream if it's chat
     };
 
-    updateSessionMessages(sessionId, (msgs) => [...msgs, loadingMsg]);
+    updateSessionMessages(sessionId, (msgs) => {
+        if (msgs.some(m => m.id === modelMsgId)) return msgs;
+        return [...msgs, loadingMsg];
+    });
 
     try {
       if (isImageGen) {
         // HANDLE IMAGE GENERATION
-        const imageResult = await generateImage(text);
-        
-        updateSessionMessages(sessionId, (msgs) => 
-          msgs.map(m => m.id === modelMsgId ? {
-            ...m,
-            isGeneratingImage: false,
-            image: {
-              base64: imageResult.base64,
-              model: imageResult.model,
-              prompt: imageResult.prompt
-            }
-          } : m)
-        );
+        // Wrap in explicit try/catch to ensure we don't crash the app logic
+        try {
+            const imageResult = await generateImage(text);
+            updateSessionMessages(sessionId, (msgs) => 
+              msgs.map(m => m.id === modelMsgId ? {
+                ...m,
+                isGeneratingImage: false,
+                image: {
+                  base64: imageResult.base64,
+                  model: imageResult.model,
+                  prompt: imageResult.prompt
+                }
+              } : m)
+            );
+        } catch (imgError: any) {
+            // Handle image generation failure gracefully
+             updateSessionMessages(sessionId, (msgs) => 
+                msgs.map(m => m.id === modelMsgId ? { 
+                    ...m, 
+                    isGeneratingImage: false,
+                    content: `**Image Generation Failed**\n\n${imgError.message || "Unable to generate image at this time."}` 
+                } : m)
+            );
+        }
         
       } else {
         // HANDLE CHAT STREAMING
+        // We need to fetch the LATEST messages from state to include the one we just added
+        // Since state updates are async, we construct the history manually here
         const currentSession = sessions.find(s => s.id === sessionId);
-        const history = currentSession ? [...currentSession.messages, userMsg] : [userMsg];
+        // Fallback: if session isn't updated in closure yet, assume empty + userMsg
+        const existingMsgs = currentSession ? currentSession.messages : [];
+        const history = [...existingMsgs, userMsg]; 
 
         await streamChatResponse(
             history, 
@@ -149,7 +180,6 @@ const App: React.FC = () => {
             attachments, 
             currentConfig,
             (chunk) => {
-                // Update message content with the full accumulated text
                 updateSessionMessages(sessionId, (msgs) => 
                     msgs.map(m => m.id === modelMsgId ? { ...m, content: chunk } : m)
                 );
@@ -168,7 +198,6 @@ const App: React.FC = () => {
       }
     } catch (error: any) {
       console.error("Processing error:", error);
-      // Update the placeholder with the error message so the user knows what happened
       updateSessionMessages(sessionId, (msgs) => 
         msgs.map(m => m.id === modelMsgId ? { 
             ...m, 
@@ -188,16 +217,22 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-background text-textMain overflow-hidden relative">
       
       {/* Sidebar - Desktop */}
-      <div className={`${isSidebarOpen ? 'w-[280px]' : 'w-0'} transition-[width] duration-300 ease-in-out hidden md:block relative h-full bg-surface overflow-hidden border-r border-border shrink-0`}>
-         <Sidebar 
-           isOpen={isSidebarOpen} 
-           toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-           sessions={sessions}
-           currentSessionId={currentSessionId}
-           onNewChat={createNewSession}
-           onSelectSession={setCurrentSessionId}
-           onOpenSettings={() => setIsSettingsOpen(true)}
-         />
+      {/* Use min-w-0 to allow flex items to shrink below content size */}
+      <div 
+        className={`relative overflow-hidden bg-surface border-r border-border shrink-0 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-[280px] opacity-100' : 'w-0 opacity-0 border-none'}`}
+      >
+         {/* Inner wrapper with fixed width to prevent content squishing during transition */}
+         <div className="w-[280px] h-full">
+            <Sidebar 
+            isOpen={isSidebarOpen} 
+            toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            onNewChat={createNewSession}
+            onSelectSession={setCurrentSessionId}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            />
+         </div>
       </div>
 
       {/* Sidebar - Mobile Overlay */}
@@ -229,7 +264,7 @@ const App: React.FC = () => {
               >
                 <PanelLeftOpen className="w-5 h-5" />
               </button>
-              <span className="font-medium text-sm">
+              <span className="font-medium text-sm truncate max-w-[200px]">
                 {currentSession?.title || 'New Chat'}
               </span>
            </div>
